@@ -1,0 +1,118 @@
+# This script reads shift data from an Excel file and sends personalized messages
+# to employees via the LINE Messaging API.
+
+import pandas as pd
+import requests
+import json
+
+# ==============================================================================
+# CONFIGURATION
+# You will need to get these values from your LINE Developers console.
+# ==============================================================================
+# Replace 'YOUR_CHANNEL_ACCESS_TOKEN' with your actual channel access token.
+CHANNEL_ACCESS_TOKEN = 'YOUR_CHANNEL_ACCESS_TOKEN'
+
+# Replace 'YOUR_EXCEL_FILE.xlsx' with the path to your Excel file.
+EXCEL_FILE_PATH = 'shift_schedule.xlsx'
+
+# The URL for the LINE Messaging API
+LINE_API_URL = "https://api.line.me/v2/bot/message/push"
+
+# ==============================================================================
+# MOCK EXCEL DATA STRUCTURE
+# Your Excel file should have these columns for the script to work.
+# employee_name | line_user_id | shift_date | start_time | end_time
+# ------------------------------------------------------------------
+# Jane Doe      | Uxxxxxxxxxx  | 2025-09-01 | 09:00      | 17:00
+# John Smith    | Uyyyyyyyyyy  | 2025-09-01 | 12:00      | 20:00
+# ==============================================================================
+
+
+def read_shift_data(file_path):
+    """
+    Reads the Excel file and returns a pandas DataFrame.
+    Assumes the file is in .xlsx format and the first sheet is the one with data.
+    """
+    try:
+        df = pd.read_excel(file_path)
+        print("Successfully read shift data from the Excel file.")
+        return df
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.")
+        return None
+    except Exception as e:
+        print(f"An error occurred while reading the Excel file: {e}")
+        return None
+
+
+def send_line_message(line_user_id, message_body):
+    """
+    Sends a message to a specific LINE user ID using the LINE Messaging API.
+    """
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'
+    }
+    
+    payload = {
+        'to': line_user_id,
+        'messages': [
+            {
+                'type': 'text',
+                'text': message_body
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(LINE_API_URL, headers=headers, data=json.dumps(payload))
+        response.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
+        print(f"Message sent to {line_user_id}. Status: {response.status_code}")
+        return True
+    except requests.exceptions.HTTPError as err:
+        print(f"HTTP error for {line_user_id}: {err}")
+        print(f"LINE API Response: {response.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"An error occurred while sending the message to {line_user_id}: {e}")
+    return False
+
+
+def main():
+    """
+    Main function to run the automation process.
+    """
+    # 1. Read the shift data from the Excel file
+    shift_data = read_shift_data(EXCEL_FILE_PATH)
+    if shift_data is None:
+        return
+
+    # 2. Iterate through each row and send a message
+    for index, row in shift_data.iterrows():
+        employee_name = row.get('employee_name')
+        line_user_id = row.get('line_user_id')
+        shift_date = row.get('shift_date')
+        start_time = row.get('start_time')
+        end_time = row.get('end_time')
+
+        # Check if any critical data is missing
+        if not all([employee_name, line_user_id, shift_date, start_time, end_time]):
+            print(f"Skipping row {index}: Missing required data.")
+            continue
+
+        # 3. Create the personalized message body
+        message_body = (
+            f"Hello {employee_name},\n\n"
+            f"Your shift has been scheduled for:\n"
+            f"Date: {shift_date}\n"
+            f"Time: {start_time} - {end_time}\n\n"
+            f"Thank you!"
+        )
+
+        # 4. Send the message
+        print(f"\nAttempting to send message to {employee_name} ({line_user_id})...")
+        send_line_message(line_user_id, message_body)
+
+
+if __name__ == "__main__":
+    main()
+

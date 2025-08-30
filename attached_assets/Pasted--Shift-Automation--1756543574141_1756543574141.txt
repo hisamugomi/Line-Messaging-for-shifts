@@ -1,0 +1,304 @@
+# ==============================================================================
+# Shift Automation App
+#
+# This Flask application provides a web interface to automate the process
+# of sending shift schedules via the LINE Messaging API.
+#
+# It allows a user to:
+# 1. Upload an Excel file (.xlsx) containing shift data.
+# 2. Preview the data in a table to ensure it is correct.
+# 3. Send personalized messages to each employee via the LINE API.
+#
+# To use this application:
+# 1. Install the necessary libraries:
+#    pip install Flask pandas requests openpyxl
+# 2. Get your LINE Channel Access Token from the LINE Developers console
+#    and replace the placeholder below.
+# 3. Ensure your Excel file has the required columns:
+#    'employee_name', 'line_user_id', 'shift_date', 'start_time', 'end_time'
+# 4. Run this script:
+#    python app.py
+# ==============================================================================
+
+from flask import Flask, request, render_template_string
+import pandas as pd
+import requests
+import json
+import os
+
+app = Flask(__name__)
+
+# IMPORTANT: Replace with your actual Channel Access Token.
+# This token authenticates your requests to the LINE API.
+CHANNEL_ACCESS_TOKEN = 'YOUR_CHANNEL_ACCESS_TOKEN'
+
+# Temporary storage for the dataframe after a file is uploaded
+# This allows us to use the data in a different route
+UPLOADED_DATA = None
+
+# ==============================================================================
+# HTML Template (embedded within the Python file)
+# ==============================================================================
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LINE Shift Sender</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .container {
+            max-width: 800px;
+            margin: auto;
+            padding: 2rem;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container bg-white shadow-lg rounded-xl p-8 my-8">
+        <h1 class="text-3xl font-bold mb-6 text-center text-gray-800">LINE Shift Automation</h1>
+        <p class="text-gray-600 mb-6 text-center">
+            Upload your Excel schedule, preview the data, and send the shifts automatically.
+        </p>
+
+        <!-- Status Message Area -->
+        <div id="status-message" class="bg-blue-100 text-blue-800 p-4 rounded-lg mb-6 text-center" style="display:none;"></div>
+
+        <!-- File Upload Form -->
+        <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data" class="bg-gray-50 p-6 rounded-lg mb-6">
+            <div class="mb-4">
+                <label class="block text-gray-700 font-bold mb-2" for="file-upload">
+                    Upload Excel File (.xlsx)
+                </label>
+                <input class="block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-full file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-indigo-50 file:text-indigo-700
+                    hover:file:bg-indigo-100"
+                    id="file-upload" type="file" name="file">
+            </div>
+            <button type="submit" class="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-full
+                                        hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                Upload & Preview
+            </button>
+        </form>
+
+        <!-- Data Preview Area -->
+        <div id="preview-area" style="display:none;">
+            <h2 class="text-2xl font-bold mb-4 text-gray-800">Data Preview</h2>
+            <div class="overflow-x-auto rounded-lg shadow-inner">
+                <table id="data-table" class="min-w-full">
+                    <thead class="bg-gray-200">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Shift Date</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Shift Time</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">LINE ID</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <!-- Data will be inserted here by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-sm text-gray-500 mt-4 text-center">
+                Please ensure all data is correct before sending.
+            </p>
+            <button id="send-button" class="w-full bg-green-500 text-white font-bold py-2 px-4 rounded-full mt-4
+                                            hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2">
+                Send Messages
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const uploadForm = document.getElementById('upload-form');
+        const statusMessage = document.getElementById('status-message');
+        const previewArea = document.getElementById('preview-area');
+        const dataTableBody = document.querySelector('#data-table tbody');
+        const sendButton = document.getElementById('send-button');
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(uploadForm);
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    showStatus('File uploaded successfully. Previewing data below.', 'bg-green-100 text-green-800');
+                    renderTable(data.data);
+                    previewArea.style.display = 'block';
+                } else {
+                    showStatus(data.message, 'bg-red-100 text-red-800');
+                    previewArea.style.display = 'none';
+                }
+            } catch (error) {
+                showStatus('An error occurred during upload.', 'bg-red-100 text-red-800');
+                console.error('Error:', error);
+            }
+        });
+
+        sendButton.addEventListener('click', async () => {
+            showStatus('Sending messages...', 'bg-yellow-100 text-yellow-800');
+            try {
+                const response = await fetch('/send_messages', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                showStatus(data.message, data.status === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800');
+                previewArea.style.display = 'none';
+            } catch (error) {
+                showStatus('An error occurred while sending messages.', 'bg-red-100 text-red-800');
+                console.error('Error:', error);
+            }
+        });
+
+        function showStatus(message, className) {
+            statusMessage.textContent = message;
+            statusMessage.className = `p-4 rounded-lg mb-6 text-center ${className}`;
+            statusMessage.style.display = 'block';
+        }
+
+        function renderTable(data) {
+            dataTableBody.innerHTML = '';
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${row['employee_name']}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${row['shift_date']}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${row['start_time']} - ${row['end_time']}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${row['line_user_id']}</td>
+                `;
+                dataTableBody.appendChild(tr);
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+# ==============================================================================
+# Flask Routes & Logic
+# ==============================================================================
+
+@app.route('/')
+def index():
+    """Renders the main HTML page for the app."""
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """
+    Handles the file upload, reads the Excel data, and prepares it for preview.
+    """
+    global UPLOADED_DATA
+
+    if 'file' not in request.files:
+        return json.dumps({'status': 'error', 'message': 'No file part'})
+    
+    file = request.files['file']
+    if file.filename == '':
+        return json.dumps({'status': 'error', 'message': 'No selected file'})
+
+    if file:
+        try:
+            df = pd.read_excel(file)
+            required_cols = ['employee_name', 'line_user_id', 'shift_date', 'start_time', 'end_time']
+            if not all(col in df.columns for col in required_cols):
+                return json.dumps({'status': 'error', 'message': 'Missing one or more required columns.'})
+            
+            # Convert DataFrame to a list of dictionaries for easier JSON serialization
+            UPLOADED_DATA = df.to_dict('records')
+            
+            # Return a subset of the data for the preview table
+            preview_data = [{
+                'employee_name': row['employee_name'],
+                'line_user_id': row['line_user_id'],
+                'shift_date': str(row['shift_date']), # Convert date objects to strings
+                'start_time': str(row['start_time']),
+                'end_time': str(row['end_time'])
+            } for row in UPLOADED_DATA]
+
+            return json.dumps({'status': 'success', 'data': preview_data})
+        except Exception as e:
+            return json.dumps({'status': 'error', 'message': f'Error reading Excel file: {e}'})
+
+@app.route('/send_messages', methods=['POST'])
+def send_messages():
+    """
+    Sends personalized messages to each employee using the LINE Messaging API.
+    """
+    global UPLOADED_DATA
+    
+    if not UPLOADED_DATA:
+        return json.dumps({'status': 'error', 'message': 'No data to send. Please upload a file first.'})
+
+    successful_sends = 0
+    total_to_send = len(UPLOADED_DATA)
+
+    # Headers for the LINE API request
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {CHANNEL_ACCESS_TOKEN}'
+    }
+
+    for row in UPLOADED_DATA:
+        try:
+            message_body = (
+                f"Hello {row['employee_name']},\n\n"
+                f"Your shift has been scheduled for:\n"
+                f"Date: {str(row['shift_date']).split(' ')[0]}\n"
+                f"Time: {row['start_time']} - {row['end_time']}\n\n"
+                f"Thank you!"
+            )
+            
+            payload = {
+                'to': row['line_user_id'],
+                'messages': [
+                    {
+                        'type': 'text',
+                        'text': message_body
+                    }
+                ]
+            }
+
+            response = requests.post("https://api.line.me/v2/bot/message/push", headers=headers, data=json.dumps(payload))
+            response.raise_for_status()
+            successful_sends += 1
+        except Exception as e:
+            print(f"Failed to send message to {row.get('employee_name', 'Unknown')}: {e}")
+
+    # Clear the data after sending to prevent accidental resends
+    UPLOADED_DATA = None
+
+    if successful_sends == total_to_send:
+        return json.dumps({'status': 'success', 'message': f'Successfully sent {successful_sends} messages.'})
+    else:
+        return json.dumps({'status': 'error', 'message': f'Sent {successful_sends} of {total_to_send} messages. Check the console for errors.'})
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
