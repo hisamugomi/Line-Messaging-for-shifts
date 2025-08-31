@@ -217,6 +217,25 @@ def clear_data():
     UPLOADED_DATA = None
     return jsonify({'status': 'success', 'message': 'Data cleared successfully'})
 
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """LINE webhook to capture user IDs when users message the bot."""
+    try:
+        body = request.get_json()
+        logging.info(f"Webhook received: {body}")
+        
+        if 'events' in body:
+            for event in body['events']:
+                if event['type'] == 'message':
+                    user_id = event['source']['userId']
+                    logging.info(f"FOUND USER ID: {user_id}")
+                    return jsonify({'status': 'success', 'message': f'User ID captured: {user_id}'})
+        
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)})
+
 @app.errorhandler(404)
 def not_found(error):
     return render_template('index.html'), 404
