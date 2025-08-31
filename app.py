@@ -5,6 +5,9 @@ import json
 import logging
 from flask import Flask, request, render_template, jsonify, flash, redirect, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging for better debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -108,7 +111,7 @@ def upload_file():
         if file.filename == '':
             return jsonify({'status': 'error', 'message': 'No file selected'})
         
-        if not allowed_file(file.filename):
+        if not allowed_file (file.filename):
             return jsonify({'status': 'error', 'message': 'Invalid file type. Please upload .xlsx or .xls files only.'})
         
         # Read Excel file
