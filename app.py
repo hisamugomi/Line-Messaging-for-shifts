@@ -6,6 +6,8 @@ import logging
 from flask import Flask, request, render_template, jsonify, flash, redirect, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
+import sqlite3
+
 
 load_dotenv()
 
@@ -15,38 +17,42 @@ logging.basicConfig(level=logging.DEBUG)
 # Create Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "default-secret-for-dev")
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # Configuration
 LINE_API_URL = "https://api.line.me/v2/bot/message/push"
-UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'xlsx', 'xls'}
-
-# Ensure upload folder exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-# Global variable to store uploaded data temporarily
-UPLOADED_DATA = None
+DATABASE = 'employees.db'
 
 def allowed_file(filename):
     """Check if the uploaded file has an allowed extension."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+
+def init_db():
+    """Create the database and tables if they don't exist."""
+    with sqlite3.connect(DATABASE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                line_user_id TEXT PRIMARY KEY,
+                employee_name TEXT NOT NULL UNIQUE
+            )
+        """)
+        conn.commit()
+
 def get_line_token():
     """Get LINE API token from environment variables."""
     return os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "YOUR_CHANNEL_ACCESS_TOKEN")
 
+required_columns = ['employee_name', 'shift_date', 'start_time', 'end_time']
 def validate_excel_data(df):
     """Validate that the Excel file has required columns."""
-    required_columns = ['employee_name', 'line_user_id', 'shift_date', 'start_time', 'end_time']
     missing_columns = [col for col in required_columns if col not in df.columns]
     
     if missing_columns:
         return False, f"Missing required columns: {', '.join(missing_columns)}"
     
     # Check for empty rows
-    empty_rows = df[required_columns].isnull().any(axis=1).sum()
-    if empty_rows > 0:
+    if df[required_columns].isnull().any(axis=1).any():
         logging.warning(f"Found {empty_rows} rows with missing data")
     
     return True, "Valid data structure"
@@ -77,21 +83,10 @@ def send_line_message(line_user_id, message_body):
     try:
         response = requests.post(LINE_API_URL, headers=headers, data=json.dumps(payload))
         response.raise_for_status()
-        logging.info(f"Message sent successfully to {line_user_id}")
         return True, "Message sent successfully"
-    except requests.exceptions.HTTPError as e:
-        error_msg = f"HTTP error: {e}"
-        try:
-            if response.text:
-                error_msg += f" - Response: {response.text}"
-        except:
-            pass
-        logging.error(error_msg)
-        return False, error_msg
     except requests.exceptions.RequestException as e:
-        error_msg = f"Request error: {e}"
-        logging.error(error_msg)
-        return False, error_msg
+        logging.error(f"Failed to send message to {line_user_id}: {e}")
+        return False, f"Failed to send message: {e}"
 
 @app.route('/')
 def index():
@@ -100,9 +95,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """Handle Excel file upload and validation."""
-    global UPLOADED_DATA
-    
+    """Handle Excel file upload and validation."""    
     try:
         if 'file' not in request.files:
             return jsonify({'status': 'error', 'message': 'No file uploaded'})
@@ -123,24 +116,20 @@ def upload_file():
             return jsonify({'status': 'error', 'message': message})
         
         # Clean and prepare data
-        df = df.dropna(subset=['employee_name', 'line_user_id', 'shift_date', 'start_time', 'end_time'])
+        df = df.dropna(subset=['employee_name', 'shift_date', 'start_time', 'end_time'])
         
         if df.empty:
             return jsonify({'status': 'error', 'message': 'No valid data found in the uploaded file'})
         
-        # Store data globally for later use
-        UPLOADED_DATA = df.to_dict('records')
-        
-        # Prepare preview data
-        preview_data = []
-        for row in UPLOADED_DATA:
-            preview_data.append({
+        preview_data = [
+            {
                 'employee_name': str(row['employee_name']),
                 'line_user_id': str(row['line_user_id']),
-                'shift_date': str(row['shift_date']).split(' ')[0],  # Remove time part if present
+                'shift_date': str(row['shift_date']).split(' ')[0],
                 'start_time': str(row['start_time']),
                 'end_time': str(row['end_time'])
-            })
+            } for row in df.to_dict('records')
+        ]
         
         return jsonify({
             'status': 'success', 
@@ -155,84 +144,134 @@ def upload_file():
 @app.route('/send_messages', methods=['POST'])
 def send_messages():
     """Send LINE messages to all employees in the uploaded data."""
-    global UPLOADED_DATA
     
-    if not UPLOADED_DATA:
-        return jsonify({'status': 'error', 'message': 'No data available. Please upload a file first.'})
-    
-    successful_sends = 0
-    failed_sends = 0
-    errors = []
-    
-    for row in UPLOADED_DATA:
-        try:
-            # Create personalized message
-            message_body = (
-                f"Hello {row['employee_name']},\n\n"
-                f"Your shift has been scheduled for:\n"
-                f"Date: {str(row['shift_date']).split(' ')[0]}\n"
-                f"Time: {row['start_time']} - {row['end_time']}\n\n"
-                f"Thank you for your hard work!"
-            )
-            
-            # Send message
-            success, error_msg = send_line_message(row['line_user_id'], message_body)
-            
-            if success:
-                successful_sends += 1
-            else:
-                failed_sends += 1
-                errors.append(f"{row['employee_name']}: {error_msg}")
-                
-        except Exception as e:
-            failed_sends += 1
-            error_msg = f"{row.get('employee_name', 'Unknown')}: {str(e)}"
-            errors.append(error_msg)
-            logging.error(f"Error sending message: {error_msg}")
-    
-    # Clear uploaded data after processing
-    total_processed = successful_sends + failed_sends
-    UPLOADED_DATA = None
-    
-    # Prepare response
-    if failed_sends == 0:
-        return jsonify({
-            'status': 'success',
-            'message': f'Successfully sent {successful_sends} messages to all employees!'
-        })
-    elif successful_sends == 0:
-        return jsonify({
-            'status': 'error',
-            'message': f'Failed to send all {failed_sends} messages. Please check your LINE API configuration.',
-            'errors': errors[:5]  # Limit error messages to avoid overwhelming the user
-        })
-    else:
-        return jsonify({
-            'status': 'warning',
-            'message': f'Sent {successful_sends} of {total_processed} messages. {failed_sends} failed.',
-            'errors': errors[:5]
-        })
+    try:
+        data = request.get_json()
 
-@app.route('/clear_data', methods=['POST'])
-def clear_data():
-    """Clear uploaded data."""
-    global UPLOADED_DATA
-    UPLOADED_DATA = None
-    return jsonify({'status': 'success', 'message': 'Data cleared successfully'})
+        if not data or 'data' not in data:
+            return jsonify({'status': 'error','message':'No data'})
+
+        data = data.get('data', [])
+        if not data:
+            logging.error("No data provided in send_messages")
+            return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+        logging.info(f"Received data: {data}")
+
+        if not all(all(key in item for key in required_columns) for item in data):
+            logging.error("Missing required keys in data")
+            return jsonify({'status': 'error', 'message': 'Data missing required keys: employee_name, shift_date, start_time, end_time'}), 400
+        
+        df = pd.DataFrame(data)
+        
+        if 'employee_name' not in df.columns:
+            logging.error("employee_name column missing in DataFrame")
+            return jsonify({'status': 'error', 'message': 'employee_name column missing in data'}), 400
+        
+        grouped_shifts = df.groupby('employee_name')
+        successful_sends = 0
+        failed_sends = 0
+        errors = []
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT employee_name, line_user_id FROM users")
+            registered_users = dict(cursor.fetchall())
+
+        for name, shifts in grouped_shifts:
+            line_user_id = registered_users.get(name)
+        
+            if not line_user_id:
+                error_msg = f"User '{name}' not found in database"
+                logging.error(error_msg)
+                failed_sends += 1
+                errors.append(error_msg)
+                continue
+
+                # Create personalized message
+            message_body = f"Hello {name}, Your shifts have been scheduled for:"
+
+            for index, row in shifts.iterrows():
+                    shift_info = f"Date: {row['shift_date']}"
+
+                    if row['start_time'] and row['end_time']:
+                        shift_info += f", {row['start_time']} - {row['end_time']}"
+                    elif row['start_time'] == '出勤':
+                        shift_info += f", Time: {row['start_time']}"
+                        
+                    if 'place' in row and pd.notna(row['place']):
+                        shift_info += f" {row['place']}"
+
+                    message_body += f"- {shift_info}\n"
+
+            message_body += "\n 宜しくおねがいします"
+
+                    
+                    # Send message
+            success, error_msg = send_line_message(line_user_id, message_body)
+                    
+            if success:
+                        successful_sends += 1
+            else:
+                        failed_sends += 1
+                        # errors.append(f"{name}: {error_msg}")
+            
+        # Clear uploaded data after processing
+        total_processed = successful_sends + failed_sends
+        UPLOADED_DATA = None
+        
+        # Prepare response
+        if failed_sends == 0:
+            return jsonify({
+                'status': 'success',
+                'message': f'Successfully sent {successful_sends} messages to all employees!'
+            })
+        elif successful_sends == 0:
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to send all {failed_sends} messages. Please check your LINE API configuration.',
+                'errors': errors[:5]  # Limit error messages to avoid overwhelming the user
+            })
+        else:
+            return jsonify({
+                'status': 'warning',
+                'message': f'Sent {successful_sends} of {total_processed} messages. {failed_sends} failed.',
+                'errors': errors[:5]
+            })
+    except Exception as e:
+        logging.error(f"Error sending messages: {e}")
+        return jsonify({'status': 'error', 'message': f'Error: {str(e)}'})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+
     """LINE webhook to capture user IDs when users message the bot."""
     try:
         body = request.get_json()
         logging.info(f"Webhook received: {body}")
-        
-        if 'events' in body:
-            for event in body['events']:
-                if event['type'] == 'message':
+
+        for event in body.get('events', []):
+                if event['type'] == 'message' and event['message']['type'] == 'text':
                     user_id = event['source']['userId']
-                    logging.info(f"FOUND USER ID: {user_id}")
-                    return jsonify({'status': 'success', 'message': f'User ID captured: {user_id}'})
+                    user_message = event['message']['text'].strip()
+                    with sqlite3.connect(DATABASE) as conn:
+                        cursor = conn.cursor()
+
+                        cursor.execute("SELECT employee_name FROM users WHERE line_user_id = ?", (user_id,))
+                        existing_user = cursor.fetchone()
+
+                        if existing_user: # User already registered
+                            message = f"You are already registered as {existing_user[0]}."
+                        elif user_message.lower() == 'register':
+                            #User is starting registration process
+                            message = "Please reply with your full name to register"
+                        else: #Save user's ID and Name
+                            try: 
+                                cursor.execute("INSERT INTO users (line_user_id, employee_name) VALUES (?, ?)", (user_id, user_message))
+                                conn.commit()
+                                message = f"Thank you {user_message}! You have been registered."
+                                logging.info(f"new user registered {user_message} with ID {user_id}")
+                            except sqlite3.IntegrityError:
+                                message = f"Sorry the name '{user_message}' is already taken."
+                        send_line_message(user_id, message)
         
         return jsonify({'status': 'success'})
     except Exception as e:
@@ -248,5 +287,7 @@ def internal_error(error):
     logging.error(f"Internal server error: {error}")
     return jsonify({'status': 'error', 'message': 'Internal server error occurred'}), 500
 
+
 if __name__ == '__main__':
+    init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)

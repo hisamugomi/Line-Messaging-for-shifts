@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const statusIcon = document.getElementById('status-icon');
     const previewSection = document.getElementById('preview-section');
     const dataTableBody = document.getElementById('data-table-body');
+    let previewData = [];
 
     // Event listeners
     uploadForm.addEventListener('submit', handleFileUpload);
@@ -43,6 +44,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.status === 'success') {
                 showStatus('success', data.message);
+                previewData = data.data;
                 displayPreviewData(data.data);
                 previewSection.style.display = 'block';
             } else {
@@ -59,6 +61,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     async function handleSendMessages() {
+        if (!previewData.length) {
+            showStatus('error', 'No data to send. Please upload a file first.');
+            return;
+                }
         // Show loading state
         setLoadingState(sendBtn, true, 'Sending...');
         showStatus('info', 'Sending messages to employees...');
@@ -68,7 +74,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
-                }
+                },
+                body: JSON.stringify({ data: previewData })
+
             });
 
             const data = await response.json();
@@ -86,7 +94,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } catch (error) {
             console.error('Send error:', error);
-            showStatus('error', 'An error occurred while sending messages. Please try again.');
+            // showhowStatus('error', 'No data to send. Please upload a file first.');
+        returStatus('error', 'An error occurred while sending messages. Please try again.');
         } finally {
             setLoadingState(sendBtn, false, 'Send Messages');
         }
