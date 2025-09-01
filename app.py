@@ -53,7 +53,9 @@ def validate_excel_data(df):
     
     # Check for empty rows
     if df[required_columns].isnull().any(axis=1).any():
-        logging.warning(f"Found {empty_rows} rows with missing data")
+        logging.error("Some rows in Excel file have missing data")
+        return False, "Some rows have missing data"
+    logging.info(f"Excel file columns: {list(df.columns)}")
     
     return True, "Valid data structure"
 
@@ -162,7 +164,7 @@ def send_messages():
             return jsonify({'status': 'error', 'message': 'Data missing required keys: employee_name, shift_date, start_time, end_time'}), 400
         
         df = pd.DataFrame(data)
-        
+
         if 'employee_name' not in df.columns:
             logging.error("employee_name column missing in DataFrame")
             return jsonify({'status': 'error', 'message': 'employee_name column missing in data'}), 400
