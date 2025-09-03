@@ -106,7 +106,7 @@ def upload_file():
         if file.filename == '':
             return jsonify({'status': 'error', 'message': 'No file selected'})
         
-        if not allowed_file (file.filename):
+        if not allowed_file(file.filename):
             return jsonify({'status': 'error', 'message': 'Invalid file type. Please upload .xlsx or .xls files only.'})
         
         # Read Excel file
@@ -189,7 +189,7 @@ def send_messages():
                 continue
 
                 # Create personalized message
-            message_body = f"Hello {name}, Your shifts have been scheduled for:"
+            message_body = f"Hello {name}, Your shifts have been scheduled for:\n\n"
 
             for index, row in shifts.iterrows():
                     shift_info = f"Date: {row['shift_date']}"
@@ -218,7 +218,6 @@ def send_messages():
             
         # Clear uploaded data after processing
         total_processed = successful_sends + failed_sends
-        UPLOADED_DATA = None
         
         # Prepare response
         if failed_sends == 0:
