@@ -1,0 +1,8 @@
+pandas
+requests
+json
+logging
+flask
+werkzeug
+dotenv
+sqlite3
