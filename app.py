@@ -357,6 +357,32 @@ def get_shift_confirmations():
         logging.error(f"Error retrieving shift confirmations: {e}")
         return []
 
+def validate_employee_names(employee_names):
+    """Validate employee names against database and return validation results."""
+    try:
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+
+            # Get all registered employee names
+            cursor.execute("SELECT employee_name FROM users")
+            registered_names = {row[0] for row in cursor.fetchall()}
+
+            # Validate each name
+            validation_results = []
+            for name in employee_names:
+                is_registered = name in registered_names
+                validation_results.append({
+                    'name': name,
+                    'is_registered': is_registered,
+                    'status': '登録済み' if is_registered else '未登録'
+                })
+
+            return validation_results
+
+    except Exception as e:
+        logging.error(f"Error validating employee names: {e}")
+        return []
+
 def get_shift_response(user_name):
     """Provide appropriate response for shift inquiries."""
     return f"""{user_name}さん、シフト情報についてですね。
@@ -509,10 +535,35 @@ def upload_file():
         logging.error(f"Error processing file upload: {e}")
         return jsonify({'status': 'error', 'message': f'Error processing file: {str(e)}'})
 
+@app.route('/validate_names', methods=['POST'])
+@login_required
+def validate_names():
+    """Validate employee names against database."""
+    try:
+        data = request.get_json()
+
+        if not data or 'names' not in data:
+            return jsonify({'status': 'error', 'message': 'No names provided'}), 400
+
+        names = data.get('names', [])
+        if not names:
+            return jsonify({'status': 'error', 'message': 'Empty names list'}), 400
+
+        validation_results = validate_employee_names(names)
+
+        return jsonify({
+            'status': 'success',
+            'validation': validation_results
+        })
+
+    except Exception as e:
+        logging.error(f"Error validating names: {e}")
+        return jsonify({'status': 'error', 'message': 'Validation failed'}), 500
+
 @app.route('/send_messages', methods=['POST'])
 def send_messages():
     """Send LINE messages to all employees in the uploaded data."""
-    
+
     try:
         data = request.get_json()
 
@@ -528,81 +579,109 @@ def send_messages():
         if not all(all(key in item for key in required_columns) for item in data):
             logging.error("Missing required keys in data")
             return jsonify({'status': 'error', 'message': 'Data missing required keys: employee_name, shift_date, start_time, end_time'}), 400
-        
+
         df = pd.DataFrame(data)
 
         if 'employee_name' not in df.columns:
             logging.error("employee_name column missing in DataFrame")
             return jsonify({'status': 'error', 'message': 'employee_name column missing in data'}), 400
-        
+
+        # Validate employee names before sending
+        unique_names = df['employee_name'].unique().tolist()
+        validation_results = validate_employee_names(unique_names)
+
+        # Separate registered and unregistered employees
+        registered_names = {result['name'] for result in validation_results if result['is_registered']}
+        unregistered_names = [result['name'] for result in validation_results if not result['is_registered']]
+
         grouped_shifts = df.groupby('employee_name')
         successful_sends = 0
         failed_sends = 0
+        skipped_sends = 0
         errors = []
+        warnings = []
+
         with sqlite3.connect(DATABASE) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT employee_name, line_user_id FROM users")
             registered_users = dict(cursor.fetchall())
 
         for name, shifts in grouped_shifts:
+            if name not in registered_names:
+                warning_msg = f"従業員 '{name}' はデータベースに未登録のため、メッセージをスキップしました"
+                logging.warning(warning_msg)
+                warnings.append(warning_msg)
+                skipped_sends += 1
+                continue
+
             line_user_id = registered_users.get(name)
-        
+
             if not line_user_id:
-                error_msg = f"User '{name}' not found in database"
+                error_msg = f"従業員 '{name}' のLINE IDが見つかりません"
                 logging.error(error_msg)
                 failed_sends += 1
                 errors.append(error_msg)
                 continue
 
-                # Create personalized message
+            # Create personalized message
             message_body = f"{name}さん、以下のシフトが予定されています：\n\n"
 
             for index, row in shifts.iterrows():
-                    shift_info = f"日付: {row['shift_date']}"
+                shift_info = f"日付: {row['shift_date']}"
 
-                    if row['start_time'] and row['end_time']:
-                        shift_info += f", {row['start_time']} - {row['end_time']}"
-                    elif row['start_time'] == '出勤':
-                        shift_info += f", 時間: {row['start_time']}"
+                if row['start_time'] and row['end_time']:
+                    shift_info += f", {row['start_time']} - {row['end_time']}"
+                elif row['start_time'] == '出勤':
+                    shift_info += f", 時間: {row['start_time']}"
 
-                    if 'place' in row and pd.notna(row['place']):
-                        shift_info += f" {row['place']}"
+                if 'place' in row and pd.notna(row['place']):
+                    shift_info += f" {row['place']}"
 
-                    message_body += f"- {shift_info}\n"
+                message_body += f"- {shift_info}\n"
 
             message_body += "\n 宜しくおねがいします"
 
-                    
-                    # Send message
+            # Send message
             success, error_msg = send_line_message(line_user_id, message_body)
-                    
+
             if success:
-                        successful_sends += 1
+                successful_sends += 1
+                logging.info(f"Message sent successfully to {name}")
             else:
-                        failed_sends += 1
-                        # errors.append(f"{name}: {error_msg}")
-            
+                failed_sends += 1
+                errors.append(f"{name}: {error_msg}")
+
         # Clear uploaded data after processing
-        total_processed = successful_sends + failed_sends
-        
-        # Prepare response
-        if failed_sends == 0:
-            return jsonify({
-                'status': 'success',
-                'message': f'Successfully sent {successful_sends} messages to all employees!'
-            })
-        elif successful_sends == 0:
-            return jsonify({
-                'status': 'error',
-                'message': f'Failed to send all {failed_sends} messages. Please check your LINE API configuration.',
-                'errors': errors[:5]  # Limit error messages to avoid overwhelming the user
-            })
-        else:
-            return jsonify({
-                'status': 'warning',
-                'message': f'Sent {successful_sends} of {total_processed} messages. {failed_sends} failed.',
-                'errors': errors[:5]
-            })
+        total_processed = successful_sends + failed_sends + skipped_sends
+
+        # Prepare comprehensive response
+        response_data = {
+            'status': 'success',
+            'message': f'処理完了: {successful_sends}件送信成功, {skipped_sends}件スキップ, {failed_sends}件失敗',
+            'details': {
+                'successful': successful_sends,
+                'skipped': skipped_sends,
+                'failed': failed_sends,
+                'total': total_processed
+            }
+        }
+
+        if warnings:
+            response_data['warnings'] = warnings[:10]  # Limit warnings to avoid overwhelming
+
+        if errors:
+            response_data['errors'] = errors[:10]  # Limit errors to avoid overwhelming
+            if successful_sends == 0 and skipped_sends == 0:
+                response_data['status'] = 'error'
+                response_data['message'] = f'すべてのメッセージ送信に失敗しました ({failed_sends}件)'
+            else:
+                response_data['status'] = 'warning'
+
+        if unregistered_names:
+            response_data['unregistered_employees'] = unregistered_names
+
+        return jsonify(response_data)
+
     except Exception as e:
         logging.error(f"Error sending messages: {e}")
         return jsonify({'status': 'error', 'message': f'Error: {str(e)}'})

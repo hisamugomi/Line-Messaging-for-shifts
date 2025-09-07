@@ -64,10 +64,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!previewData.length) {
             showStatus('error', 'No data to send. Please upload a file first.');
             return;
-                }
+        }
+
         // Show loading state
         setLoadingState(sendBtn, true, 'Sending...');
-        showStatus('info', 'Sending messages to employees...');
+        showStatus('info', 'Validating employee names and sending messages...');
 
         try {
             const response = await fetch('/send_messages', {
@@ -76,22 +77,44 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ data: previewData })
-
             });
 
             const data = await response.json();
 
+            // Display detailed results
+            let message = data.message;
+            if (data.details) {
+                message += `\n\n📊 詳細:\n• 成功: ${data.details.successful}件\n• スキップ: ${data.details.skipped}件\n• 失敗: ${data.details.failed}件`;
+            }
+
             if (data.status === 'success') {
-                showStatus('success', data.message);
+                showStatus('success', message);
                 previewSection.style.display = 'none';
                 uploadForm.reset();
             } else if (data.status === 'warning') {
-                showStatus('warning', data.message, data.errors);
+                // Show warnings for unregistered employees
+                let warningMessage = message;
+                if (data.warnings && data.warnings.length > 0) {
+                    warningMessage += '\n\n⚠️ 警告:\n' + data.warnings.slice(0, 5).join('\n');
+                    if (data.warnings.length > 5) {
+                        warningMessage += `\n... 他${data.warnings.length - 5}件`;
+                    }
+                }
+                showStatus('warning', warningMessage, data.errors);
                 previewSection.style.display = 'none';
                 uploadForm.reset();
             } else {
-                showStatus('error', data.message, data.errors);
+                showStatus('error', message, data.errors);
             }
+
+            // Show unregistered employees if any
+            if (data.unregistered_employees && data.unregistered_employees.length > 0) {
+                setTimeout(() => {
+                    const unregisteredList = data.unregistered_employees.join(', ');
+                    showStatus('info', `未登録の従業員: ${unregisteredList}\n\nこれらの従業員はメッセージを受信しません。`, null, false);
+                }, 3000);
+            }
+
         } catch (error) {
             console.error('Send error:', error);
             showStatus('error', 'An error occurred while sending messages. Please try again.');
