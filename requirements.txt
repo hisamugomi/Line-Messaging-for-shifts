@@ -5,3 +5,4 @@ werkzeug
 python-dotenv
 Flask-Login
 google-generativeai
+openpyxl
