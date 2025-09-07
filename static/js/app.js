@@ -94,8 +94,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } catch (error) {
             console.error('Send error:', error);
-            // showhowStatus('error', 'No data to send. Please upload a file first.');
-        returStatus('error', 'An error occurred while sending messages. Please try again.');
+            showStatus('error', 'An error occurred while sending messages. Please try again.');
         } finally {
             setLoadingState(sendBtn, false, 'Send Messages');
         }
@@ -208,4 +207,50 @@ document.addEventListener('DOMContentLoaded', function() {
         div.textContent = text;
         return div.innerHTML;
     }
+
+    // Confirmation refresh functionality
+    window.refreshConfirmations = async function() {
+        try {
+            const response = await fetch('/api/confirmations');
+            const confirmations = await response.json();
+
+            const tableBody = document.getElementById('confirmations-table-body');
+
+            if (confirmations && confirmations.length > 0) {
+                tableBody.innerHTML = confirmations.map(confirmation => `
+                    <tr>
+                        <td>
+                            <i class="fas fa-check-circle text-success me-2"></i>
+                            ${escapeHtml(confirmation.employee_name)}
+                        </td>
+                        <td>${escapeHtml(confirmation.confirmed_at)}</td>
+                        <td>${escapeHtml(confirmation.week_start)}</td>
+                        <td>
+                            <span class="badge bg-success">
+                                <i class="fas fa-check me-1"></i>
+                                ${escapeHtml(confirmation.status)}
+                            </span>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="text-center text-muted py-4">
+                            <i class="fas fa-info-circle me-2"></i>
+                            まだシフト確認がありません
+                        </td>
+                    </tr>
+                `;
+            }
+
+            showStatus('success', '確認状況を更新しました。');
+        } catch (error) {
+            console.error('Refresh error:', error);
+            showStatus('error', '確認状況の更新中にエラーが発生しました。');
+        }
+    };
+
+    // Auto-refresh confirmations every 30 seconds
+    setInterval(refreshConfirmations, 30000);
 });

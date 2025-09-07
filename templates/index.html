@@ -16,6 +16,16 @@
                     <i class="fas fa-calendar-alt text-info me-3 fs-1"></i>
                     <h1 class="display-4 mb-0">LINE シフト自動化</h1>
                 </div>
+                <div class="d-flex justify-content-end mb-2">
+                    <small class="text-muted me-2">
+                        <i class="fas fa-user me-1"></i>
+                        {{ current_user.username }}
+                    </small>
+                    <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="fas fa-sign-out-alt me-1"></i>
+                        ログアウト
+                    </a>
+                </div>
                 <p class="lead text-muted">
                     Excelスケジュールをアップロードし、データをプレビューして、LINE経由でシフト通知を自動送信します。
                 </p>
@@ -56,7 +66,7 @@
                                 <input type="file" class="form-control" id="file-input" name="file" accept=".xlsx,.xls" required>
                                 <div class="form-text">
                                     Excelファイルには以下の列が含まれている必要があります：
-                                    <code>employee_name</code>, <code>line_user_id</code>,
+                                    <code>employee_name</code>,
                                     <code>shift_date</code>, <code>start_time</code>, <code>end_time</code>
                                 </div>
                             </div>
@@ -108,6 +118,71 @@
                                 <i class="fas fa-paper-plane me-2"></i>
                                 メッセージを送信
                             </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Shift Confirmations -->
+        <div class="row justify-content-center mt-4">
+            <div class="col-lg-10">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-check-circle me-2"></i>
+                            シフト確認状況
+                        </h5>
+                        <button class="btn btn-outline-primary btn-sm" onclick="refreshConfirmations()">
+                            <i class="fas fa-sync-alt me-1"></i>
+                            更新
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-striped" id="confirmations-table">
+                                <thead>
+                                    <tr>
+                                        <th><i class="fas fa-user me-1"></i>従業員名</th>
+                                        <th><i class="fas fa-calendar-check me-1"></i>確認日時</th>
+                                        <th><i class="fas fa-calendar-week me-1"></i>対象週</th>
+                                        <th><i class="fas fa-info-circle me-1"></i>ステータス</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="confirmations-table-body">
+                                    {% if confirmations %}
+                                        {% for confirmation in confirmations %}
+                                        <tr>
+                                            <td>
+                                                <i class="fas fa-check-circle text-success me-2"></i>
+                                                {{ confirmation.employee_name }}
+                                            </td>
+                                            <td>{{ confirmation.confirmed_at }}</td>
+                                            <td>{{ confirmation.week_start }}</td>
+                                            <td>
+                                                <span class="badge bg-success">
+                                                    <i class="fas fa-check me-1"></i>
+                                                    {{ confirmation.status }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    {% else %}
+                                        <tr>
+                                            <td colspan="4" class="text-center text-muted py-4">
+                                                <i class="fas fa-info-circle me-2"></i>
+                                                まだシフト確認がありません
+                                            </td>
+                                        </tr>
+                                    {% endif %}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mt-3">
+                            <small class="text-muted">
+                                <i class="fas fa-lightbulb me-1"></i>
+                                従業員がLINEで「確認」とメッセージを送ると、ここに表示されます。
+                            </small>
                         </div>
                     </div>
                 </div>
