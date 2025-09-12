@@ -320,7 +320,7 @@ def notify_manager_confirmation(user_id, user_name, week_start):
     message = f"""✅ シフト確認完了
 
 従業員: {user_name}
-確認日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+確認日時: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 対象週: {week_start.strftime('%Y-%m-%d')} 開始
 
 シフト確認が完了しました。"""
@@ -421,7 +421,7 @@ def store_conversation(user_id, role, message):
     except Exception as e:
         logging.error(f"Error storing conversation: {e}")
 
-def get_conversation_history(user_id, limit=10):
+def get_conversation_history(user_id, limit=8):
     """Get recent conversation history for a user."""
     try:
         with sqlite3.connect(DATABASE) as conn:
@@ -515,15 +515,30 @@ def upload_file():
         if df.empty:
             return jsonify({'status': 'error', 'message': 'No valid data found in the uploaded file'})
         
+        # Format time to hh:mm only (remove seconds)
+        def format_time(time_str):
+            if pd.isna(time_str) or time_str == '':
+                return ''
+            time_str = str(time_str)
+            # If it's already in hh:mm format, return as is
+            if ':' in time_str and len(time_str.split(':')) >= 2:
+                parts = time_str.split(':')
+                if len(parts) >= 2:
+                    return f"{parts[0]}:{parts[1]}"
+            return time_str
+
         preview_data = [
             {
                 'employee_name': str(row['employee_name']),
                 'line_user_id': str(row['line_user_id']),
                 'shift_date': str(row['shift_date']).split(' ')[0],
-                'start_time': str(row['start_time']),
-                'end_time': str(row['end_time'])
+                'start_time': format_time(row['start_time']),
+                'end_time': format_time(row['end_time'])
             } for row in df.to_dict('records')
         ]
+
+        logging.info(f"Received data: {preview_data}")
+
         
         return jsonify({
             'status': 'success', 

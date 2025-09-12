@@ -152,18 +152,13 @@ document.addEventListener('DOMContentLoaded', function() {
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>
-                    <i class="fas fa-user text-muted me-2"></i>
                     ${escapeHtml(row.employee_name)}
                 </td>
+
                 <td>
-                    <code class="text-info">${escapeHtml(row.line_user_id)}</code>
-                </td>
-                <td>
-                    <i class="fas fa-calendar text-muted me-2"></i>
                     ${escapeHtml(row.shift_date)}
                 </td>
                 <td>
-                    <i class="fas fa-clock text-muted me-2"></i>
                     ${escapeHtml(row.start_time)} - ${escapeHtml(row.end_time)}
                 </td>
             `;
